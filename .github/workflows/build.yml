@@ -1,0 +1,472 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Criar arquivos do projeto
+        run: |
+          mkdir -p "$(dirname settings.gradle.kts)"
+          cat > settings.gradle.kts <<'GBEOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "GameBooster"
+          include(":app")
+          GBEOF
+          mkdir -p "$(dirname build.gradle.kts)"
+          cat > build.gradle.kts <<'GBEOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          GBEOF
+          mkdir -p "$(dirname gradle.properties)"
+          cat > gradle.properties <<'GBEOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          android.nonTransitiveRClass=true
+          GBEOF
+          mkdir -p "$(dirname app/build.gradle.kts)"
+          cat > app/build.gradle.kts <<'GBEOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.gamebooster.app"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.gamebooster.app"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          GBEOF
+          mkdir -p "$(dirname app/src/main/AndroidManifest.xml)"
+          cat > app/src/main/AndroidManifest.xml <<'GBEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="Game Booster"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          GBEOF
+          mkdir -p "$(dirname app/src/main/res/drawable/ic_launcher.xml)"
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'GBEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="96dp"
+              android:height="96dp"
+              android:viewportWidth="96"
+              android:viewportHeight="96">
+              <path
+                  android:fillColor="#FF6A00"
+                  android:pathData="M48,48m-48,0a48,48 0 1,0 96,0a48,48 0 1,0 -96,0" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M54,14 L26,54 L46,54 L40,82 L70,40 L50,40 Z" />
+          </vector>
+          GBEOF
+          mkdir -p "$(dirname app/src/main/java/com/gamebooster/app/SystemInfo.kt)"
+          cat > app/src/main/java/com/gamebooster/app/SystemInfo.kt <<'GBEOF'
+          package com.gamebooster.app
+
+          import android.app.ActivityManager
+          import android.content.Context
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.os.BatteryManager
+          import java.io.File
+
+          object SystemInfo {
+
+              data class Mem(val total: Long, val avail: Long) {
+                  val used: Long get() = total - avail
+                  val percent: Int get() = if (total > 0) ((used * 100) / total).toInt() else 0
+              }
+
+              data class Battery(val level: Int, val tempC: Float, val charging: Boolean)
+
+              fun memory(ctx: Context): Mem {
+                  val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                  val info = ActivityManager.MemoryInfo()
+                  am.getMemoryInfo(info)
+                  return Mem(info.totalMem, info.availMem)
+              }
+
+              fun battery(ctx: Context): Battery {
+                  val i: Intent? = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                  val level = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                  val scale = i?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                  val temp = (i?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f
+                  val status = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                  val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                          status == BatteryManager.BATTERY_STATUS_FULL
+                  val pct = if (level >= 0 && scale > 0) level * 100 / scale else -1
+                  return Battery(pct, temp, charging)
+              }
+
+              private fun readLong(path: String): Long =
+                  try {
+                      File(path).readText().trim().toLong()
+                  } catch (e: Exception) {
+                      -1L
+                  }
+
+              /** Frequência média atual dos núcleos em relação à máxima (0-100), ou null se o aparelho bloquear a leitura. */
+              fun cpuPercent(): Int? {
+                  var sum = 0.0
+                  var n = 0
+                  for (i in 0 until cpuCores()) {
+                      val base = "/sys/devices/system/cpu/cpu$i/cpufreq/"
+                      val cur = readLong(base + "scaling_cur_freq")
+                      val max = readLong(base + "cpuinfo_max_freq")
+                      if (cur > 0 && max > 0) {
+                          sum += cur.toDouble() / max.toDouble()
+                          n++
+                      }
+                  }
+                  return if (n > 0) ((sum / n) * 100).toInt().coerceIn(0, 100) else null
+              }
+
+              fun cpuCores(): Int = Runtime.getRuntime().availableProcessors()
+          }
+          GBEOF
+          mkdir -p "$(dirname app/src/main/java/com/gamebooster/app/Booster.kt)"
+          cat > app/src/main/java/com/gamebooster/app/Booster.kt <<'GBEOF'
+          package com.gamebooster.app
+
+          import android.app.ActivityManager
+          import android.app.NotificationManager
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ApplicationInfo
+          import android.graphics.drawable.Drawable
+          import android.os.Build
+
+          object Booster {
+
+              data class AppItem(val label: String, val pkg: String, val icon: Drawable, val isGame: Boolean)
+
+              // Apps essenciais que nunca são tocados na limpeza
+              private val PROTECTED = listOf(
+                  "com.android.phone",
+                  "com.android.dialer",
+                  "com.google.android.dialer",
+                  "com.android.mms",
+                  "com.google.android.apps.messaging",
+                  "com.android.systemui",
+                  "com.android.settings"
+              )
+
+              @Suppress("DEPRECATION")
+              private fun isGame(ai: ApplicationInfo): Boolean {
+                  if (Build.VERSION.SDK_INT >= 26 && ai.category == ApplicationInfo.CATEGORY_GAME) return true
+                  return (ai.flags and ApplicationInfo.FLAG_IS_GAME) != 0
+              }
+
+              fun launcherApps(ctx: Context): List<AppItem> {
+                  val pm = ctx.packageManager
+                  val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                  val result = ArrayList<AppItem>()
+                  for (ri in pm.queryIntentActivities(intent, 0)) {
+                      val ai = ri.activityInfo.applicationInfo
+                      if (ai.packageName == ctx.packageName) continue
+                      result.add(AppItem(ri.loadLabel(pm).toString(), ai.packageName, ri.loadIcon(pm), isGame(ai)))
+                  }
+                  return result.distinctBy { it.pkg }.sortedBy { it.label.lowercase() }
+              }
+
+              /** Pede ao Android para encerrar processos em segundo plano. Retorna quantos apps foram processados. */
+              fun cleanBackground(ctx: Context, keep: String?): Int {
+                  val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                  var count = 0
+                  for (app in launcherApps(ctx)) {
+                      if (app.pkg == keep) continue
+                      if (PROTECTED.any { app.pkg.startsWith(it) }) continue
+                      try {
+                          am.killBackgroundProcesses(app.pkg)
+                          count++
+                      } catch (e: Exception) {
+                          // ignora apps que não permitem
+                      }
+                  }
+                  return count
+              }
+
+              private fun nm(ctx: Context) =
+                  ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+              fun hasDndAccess(ctx: Context): Boolean = nm(ctx).isNotificationPolicyAccessGranted
+
+              fun enableDnd(ctx: Context): Boolean {
+                  val n = nm(ctx)
+                  if (!n.isNotificationPolicyAccessGranted) return false
+                  val cur = n.currentInterruptionFilter
+                  if (cur != NotificationManager.INTERRUPTION_FILTER_PRIORITY) {
+                      ctx.getSharedPreferences("gb", Context.MODE_PRIVATE).edit().putInt("prev_filter", cur).apply()
+                  }
+                  n.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+                  return true
+              }
+
+              fun disableDnd(ctx: Context): Boolean {
+                  val n = nm(ctx)
+                  if (!n.isNotificationPolicyAccessGranted) return false
+                  val prev = ctx.getSharedPreferences("gb", Context.MODE_PRIVATE)
+                      .getInt("prev_filter", NotificationManager.INTERRUPTION_FILTER_ALL)
+                  val restore = if (prev == NotificationManager.INTERRUPTION_FILTER_UNKNOWN)
+                      NotificationManager.INTERRUPTION_FILTER_ALL else prev
+                  n.setInterruptionFilter(restore)
+                  return true
+              }
+
+              fun launch(ctx: Context, pkg: String): Boolean {
+                  val i = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: return false
+                  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                  return try {
+                      ctx.startActivity(i)
+                      true
+                  } catch (e: Exception) {
+                      false
+                  }
+              }
+          }
+          GBEOF
+          mkdir -p "$(dirname app/src/main/java/com/gamebooster/app/MainActivity.kt)"
+          cat > app/src/main/java/com/gamebooster/app/MainActivity.kt <<'GBEOF'
+          package com.gamebooster.app
+
+          import android.app.Activity
+          import android.app.AlertDialog
+          import android.content.Intent
+          import android.content.res.ColorStateList
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.provider.Settings
+          import android.text.TextUtils
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.Button
+          import android.widget.ImageView
+          import android.widget.LinearLayout
+          import android.widget.ProgressBar
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class MainActivity : Activity() {
+
+              private val BG = Color.parseColor("#0F1220")
+              private val CARD = Color.parseColor("#1A1F36")
+              private val MUTED = Color.parseColor("#8B92B5")
+              private val ORANGE = Color.parseColor("#FF6A00")
+              private val GREEN = Color.parseColor("#2ECC71")
+              private val YELLOW = Color.parseColor("#F1C40F")
+              private val RED = Color.parseColor("#E74C3C")
+              private val BLUE = Color.parseColor("#2D3561")
+
+              private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+              private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+
+              private class Stat(val value: TextView, val bar: ProgressBar)
+
+              private val handler = Handler(Looper.getMainLooper())
+              private lateinit var root: LinearLayout
+              private lateinit var gamesBox: LinearLayout
+              private lateinit var ram: Stat
+              private lateinit var cpu: Stat
+              private lateinit var temp: Stat
+              private lateinit var bat: Stat
+              private lateinit var toggleBtn: Button
+
+              private var apps: List<Booster.AppItem> = emptyList()
+              private var showAll = false
+
+              private val ticker = object : Runnable {
+                  override fun run() {
+                      updateStats()
+                      handler.postDelayed(this, 2000)
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = BG
+                  window.navigationBarColor = BG
+                  buildUi()
+                  loadApps()
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  handler.post(ticker)
+              }
+
+              override fun onPause() {
+                  super.onPause()
+                  handler.removeCallbacks(ticker)
+              }
+
+              // ---------- helpers de UI ----------
+
+              private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+              private fun roundBg(color: Int, radius: Int = 16): GradientDrawable =
+                  GradientDrawable().apply {
+                      setColor(color)
+                      cornerRadius = dp(radius).toFloat()
+                  }
+
+              private fun tv(t: String, size: Float, color: Int = Color.WHITE, bold: Boolean = false): TextView =
+                  TextView(this).apply {
+                      text = t
+                      textSize = size
+                      setTextColor(color)
+                      if (bold) setTypeface(typeface, Typeface.BOLD)
+                  }
+
+              private fun btn(label: String, color: Int, onClick: () -> Unit): Button =
+                  Button(this).apply {
+                      setText(label)
+                      isAllCaps = false
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      background = roundBg(color, 14)
+                      setOnClickListener { onClick() }
+                  }
+
+              private fun lp(top: Int = 12): LinearLayout.LayoutParams =
+                  LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(top) }
+
+              private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+
+              private fun statCard(title: String, parent: LinearLayout): Stat {
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      background = roundBg(CARD)
+                      setPadding(dp(16), dp(14), dp(16), dp(14))
+                  }
+                  card.addView(tv(title, 12f, MUTED))
+                  val value = tv("--", 18f, Color.WHITE, true)
+                  card.addView(value)
+                  val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+                  card.addView(bar, LinearLayout.LayoutParams(MATCH, dp(8)).apply { topMargin = dp(8) })
+                  parent.addView(card, lp(10))
+                  return Stat(value, bar)
+              }
+
+              private fun colorFor(percent: Int): Int = when {
+                  percent >= 85 -> RED
+                  percent >= 65 -> YELLOW
+                  else -> GREEN
+              }
+
+              private fun setStat(s: Stat, text: String, percent: Int, color: Int) {
+                  s.value.text = text
+                  s.bar.progress = percent.coerceIn(0, 100)
+                  s.bar.progressTintList = ColorStateList.valueOf(color)
+              }
+
+              // ---------- construção da tela ----------
+
+              private fun buildUi() {
+                  val scroll = ScrollView(this).apply { setBackgroundColor(BG) }
+                  root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(16), dp(24), dp(16), dp(32))
+                  }
+                  scroll.addView(root)
+                  setContentView(scroll)
+
+                  root.addView(tv("⚡ Game Booster", 26f, Color.WHITE, true))
+                  root.addView(tv("Mais desempenho nos seus jogos", 14f, MUTED))
+
+                  ram = statCard("MEMÓRIA RAM", root)
+                  cpu = statCard("CPU (frequência atual / máxima)", root)
+                  temp = statCard("TEMPERATURA", root)
+                  bat = statCard("BATERIA", root)
+
+                  root.addView(
+                      btn("🧹 Limpar RAM agora", BLUE) { cleanOnly() },
+                      LinearLayout.LayoutParams(MATCH, dp(52)).apply { topMargin = dp(16) }
+                  )
+
+                  root.addView(tv("🎮 Jogos", 18f, Color.WHITE, true), lp(24))
+                  root.addView(tv("Toque em Jogar para otimizar e abrir o jogo", 12f, MUTED))
+
+                  gamesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                  root.addView(gamesBox, lp(8))
+
+                  toggleBtn = btn("Mostrar todos os apps", BLUE) {
+                      showAll = !showAll
+                      renderGames()
+                  }
+                  root.addView(toggleBtn, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(10) })
+
+                  root.addView(
+                      btn("🔔 Desativar Modo Jogo (voltar notificações)", BLUE) {
+                          if (Booster.disableDnd(this)) toast("Notificações restauradas")
+                          else toast("Perm
