@@ -290,7 +290,7 @@ jobs:
               }
           }
           GBEOF
-          mkdir -p "$(dirname app/src/main/java/com/gamebooster/app/MainActivity.kt)"
+                    mkdir -p "$(dirname app/src/main/java/com/gamebooster/app/MainActivity.kt)"
           cat > app/src/main/java/com/gamebooster/app/MainActivity.kt <<'GBEOF'
           package com.gamebooster.app
 
@@ -469,4 +469,192 @@ jobs:
                   root.addView(
                       btn("🔔 Desativar Modo Jogo (voltar notificações)", BLUE) {
                           if (Booster.disableDnd(this)) toast("Notificações restauradas")
-                          else toast("Perm
+                          else toast("Permissão de Não Perturbe não concedida")
+                      },
+                      LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(10) }
+                  )
+
+                  root.addView(tv("⚙️ Atalhos de ajustes", 18f, Color.WHITE, true), lp(24))
+                  root.addView(
+                      btn("🔋 Economia de bateria", BLUE) { openSettings(Settings.ACTION_BATTERY_SAVER_SETTINGS) },
+                      LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(8) }
+                  )
+                  root.addView(
+                      btn("📱 Tela (brilho e taxa de atualização)", BLUE) { openSettings(Settings.ACTION_DISPLAY_SETTINGS) },
+                      LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(8) }
+                  )
+                  root.addView(
+                      btn("🔕 Não Perturbe", BLUE) { openSettings(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) },
+                      LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(8) }
+                  )
+
+                  val tips = tv(
+                      "💡 Dicas para jogar melhor\n\n" +
+                              "• Feche apps abertos na tela de recentes antes de jogar.\n" +
+                              "• Reduza o brilho e use 60 Hz se o aparelho esquentar.\n" +
+                              "• Mantenha o celular fora da capa e longe do carregador durante partidas longas.\n" +
+                              "• Deixe pelo menos 10% de armazenamento livre.\n" +
+                              "• Ative a economia de dados para evitar downloads em segundo plano.\n\n" +
+                              "ℹ️ O Android não permite que apps comuns forcem a CPU. O Game Booster encerra processos em segundo plano, silencia notificações e monitora temperatura e memória.",
+                      13f, MUTED
+                  )
+                  tips.background = roundBg(CARD)
+                  tips.setPadding(dp(16), dp(14), dp(16), dp(14))
+                  root.addView(tips, lp(24))
+              }
+
+              private fun loadApps() {
+                  Thread {
+                      val list = Booster.launcherApps(this)
+                      runOnUiThread {
+                          apps = list
+                          renderGames()
+                      }
+                  }.start()
+              }
+
+              private fun renderGames() {
+                  gamesBox.removeAllViews()
+                  val list = if (showAll) apps else apps.filter { it.isGame }
+                  toggleBtn.text = if (showAll) "Mostrar só jogos" else "Mostrar todos os apps"
+                  if (list.isEmpty()) {
+                      gamesBox.addView(tv("Nenhum jogo detectado. Toque em \"Mostrar todos os apps\" para escolher manualmente.", 13f, MUTED))
+                      return
+                  }
+                  for (app in list) {
+                      gamesBox.addView(gameRow(app), lp(8))
+                  }
+              }
+
+              private fun gameRow(app: Booster.AppItem): View {
+                  val row = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = roundBg(CARD, 14)
+                      setPadding(dp(12), dp(10), dp(12), dp(10))
+                  }
+                  val icon = ImageView(this).apply { setImageDrawable(app.icon) }
+                  row.addView(icon, LinearLayout.LayoutParams(dp(44), dp(44)))
+                  val name = tv(app.label, 15f).apply {
+                      maxLines = 1
+                      ellipsize = TextUtils.TruncateAt.END
+                      setPadding(dp(12), 0, dp(8), 0)
+                  }
+                  row.addView(name, LinearLayout.LayoutParams(0, WRAP, 1f))
+                  val play = btn("Jogar", ORANGE) { startGame(app) }
+                  play.setPadding(dp(18), 0, dp(18), 0)
+                  row.addView(play, LinearLayout.LayoutParams(WRAP, dp(40)))
+                  return row
+              }
+
+              // ---------- ações ----------
+
+              private fun updateStats() {
+                  val m = SystemInfo.memory(this)
+                  setStat(
+                      ram,
+                      "${gb(m.used)} / ${gb(m.total)}  (${m.percent}%)",
+                      m.percent,
+                      colorFor(m.percent)
+                  )
+
+                  val c = SystemInfo.cpuPercent()
+                  if (c != null) {
+                      setStat(cpu, "$c%  •  ${SystemInfo.cpuCores()} núcleos", c, colorFor(c))
+                  } else {
+                      setStat(cpu, "Indisponível neste aparelho  •  ${SystemInfo.cpuCores()} núcleos", 0, MUTED)
+                  }
+
+                  val b = SystemInfo.battery(this)
+                  val tPct = ((b.tempC - 20f) / 30f * 100f).toInt()
+                  val tColor = when {
+                      b.tempC >= 42f -> RED
+                      b.tempC >= 38f -> YELLOW
+                      else -> GREEN
+                  }
+                  val tLabel = when {
+                      b.tempC >= 42f -> "  •  Muito quente!"
+                      b.tempC >= 38f -> "  •  Morno"
+                      else -> "  •  Normal"
+                  }
+                  setStat(temp, String.format("%.1f °C%s", b.tempC, tLabel), tPct, tColor)
+
+                  val bColor = when {
+                      b.level in 0..15 -> RED
+                      b.level in 16..30 -> YELLOW
+                      else -> GREEN
+                  }
+                  val charge = if (b.charging) "  •  Carregando" else ""
+                  setStat(bat, "${b.level}%$charge", b.level.coerceAtLeast(0), bColor)
+              }
+
+              private fun gb(bytes: Long): String = String.format("%.1f GB", bytes / 1073741824.0)
+
+              private fun cleanOnly() {
+                  val before = SystemInfo.memory(this).avail
+                  val n = Booster.cleanBackground(this, null)
+                  toast("Limpando $n apps em segundo plano...")
+                  handler.postDelayed({
+                      val freed = (SystemInfo.memory(this).avail - before).coerceAtLeast(0)
+                      toast("RAM liberada: ${freed / 1048576} MB")
+                      updateStats()
+                  }, 800)
+              }
+
+              private fun startGame(app: Booster.AppItem) {
+                  val prefs = getSharedPreferences("gb", MODE_PRIVATE)
+                  if (!Booster.hasDndAccess(this) && !prefs.getBoolean("asked_dnd", false)) {
+                      prefs.edit().putBoolean("asked_dnd", true).apply()
+                      AlertDialog.Builder(this)
+                          .setTitle("Silenciar notificações?")
+                          .setMessage("Para bloquear notificações durante o jogo, permita o acesso a \"Não Perturbe\" ao Game Booster. Você pode pular e jogar normalmente.")
+                          .setPositiveButton("Permitir") { _, _ ->
+                              openSettings(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                          }
+                          .setNegativeButton("Agora não") { _, _ -> boostAndLaunch(app) }
+                          .show()
+                  } else {
+                      boostAndLaunch(app)
+                  }
+              }
+
+              private fun boostAndLaunch(app: Booster.AppItem) {
+                  val before = SystemInfo.memory(this).avail
+                  Booster.cleanBackground(this, app.pkg)
+                  val dnd = Booster.enableDnd(this)
+                  toast("Otimizando...")
+                  handler.postDelayed({
+                      val freed = (SystemInfo.memory(this).avail - before).coerceAtLeast(0)
+                      val dndText = if (dnd) "ativo" else "desligado"
+                      toast("RAM liberada: ${freed / 1048576} MB  •  Não Perturbe: $dndText")
+                      if (!Booster.launch(this, app.pkg)) toast("Não foi possível abrir ${app.label}")
+                  }, 800)
+              }
+
+              private fun openSettings(action: String) {
+                  try {
+                      startActivity(Intent(action))
+                  } catch (e: Exception) {
+                      toast("Essa tela não está disponível neste aparelho")
+                  }
+              }
+          }
+          GBEOF
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Compilar APK
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GameBooster-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          
